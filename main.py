@@ -20,6 +20,7 @@ class MyPlugin(Star):
     async def jrys(self, event:AstrMessageEvent):
         """
         处理 jrys 指令
+        输入/jrys 指令后，生成今日运势海报
         """
         user_id = event.get_sender_id()
         # 获取用户头像
@@ -174,9 +175,13 @@ def draw_jrys_img():
 
     #如果unsign_lines>3行，怕这个warning_text和unsign_text贴在一起，加个自动换行的
     unsign_lines = wrap_text(unsign_text, max_width=1000)
-    warning_text_y = 1700
+    warning_text_y = 1850
+    unsign_text_y = 1700
+    #如果unsign_lines>3行，warning_text_y向下移动 unsign_text_y向上移动
     if len(unsign_lines) > 3:
-        warning_text_y += (len(unsign_lines) - 3) * 40 #每行40像素的间距
+        warning_text_y += (len(unsign_lines) - 3) * 10 #每行10像素的间距
+        unsign_text_y -= (len(unsign_lines) - 3) * 15 #每行15像素的间距
+
         
 
 
@@ -190,8 +195,8 @@ def draw_jrys_img():
     image = draw_text(image, text=fortune_summary, position='center',y=1400, color=(255, 255, 255), font_size=60)
     image = draw_text(image, text=lucky_star, position='center',y=1500, color=(255, 255, 255), font_size=60, gradients=True)
     image = draw_text(image, text=sign_text, position='left', y=1600, color=(255, 255, 255), font_size=30)
-    image = draw_text(image, text=unsign_text, position='left', y=warning_text_y, color=(255, 255, 255), font_size=30)
-    image = draw_text(image, text=warning_text, position='center', y=1850, color=(255, 255, 255), font_size=30)
+    image = draw_text(image, text=unsign_text, position='left', y=unsign_text_y, color=(255, 255, 255), font_size=30)
+    image = draw_text(image, text=warning_text, position='center', y=warning_text_y, color=(255, 255, 255), font_size=30)
             
     return image
 
