@@ -24,12 +24,12 @@ class MyPlugin(Star):
         """
         user_id = event.get_sender_id()
         # 获取用户头像
-        avater_path = get_avater_img(user_id)
-        if avater_path is None:
+        avatar_path = get_avatar_img(user_id)
+        if avatar_path is None:
             yield event.plain_result("获取头像失败，请稍后再试～")
 
         img = draw_jrys_img()
-        img = draw_avater_img(avater_path, img) #在图片上绘制用户头像
+        img = draw_avatar_img(avatar_path, img) #在图片上绘制用户头像
         if img is None:
             yield event.plain_result("生成图片失败，请稍后再试～")
 
@@ -485,7 +485,7 @@ def get_light_color():
 
 
 
-def get_avater_img(user_id: str) -> str:
+def get_avatar_img(user_id: str) -> str:
     """
     获取用户头像
     1. 获取用户头像
@@ -496,46 +496,43 @@ def get_avater_img(user_id: str) -> str:
     url = f"http://q.qlogo.cn/g?b=qq&nk={user_id}&s=640"
     response = requests.get(url)
     if response.status_code == 200:
-        avater_folder = os.path.join(os.path.dirname(__file__), "avater")
-        if not os.path.exists(avater_folder):
-            os.makedirs(avater_folder)
+        avatar_folder = os.path.join(os.path.dirname(__file__), "avatars")
+        if not os.path.exists(avatar_folder):
+            os.makedirs(avatar_folder)
 
 
-        with open(os.path.join(avater_folder, f"{user_id}.jpg"), 'wb') as f:
+        with open(os.path.join(avatar_folder, f"{user_id}.jpg"), 'wb') as f:
             f.write(response.content)
         
-        return os.path.join(avater_folder, f"{user_id}.jpg")
+        return os.path.join(avatar_folder, f"{user_id}.jpg")
     
 
-def draw_avater_img(avater_path: str, img: Image) -> Image:
+def draw_avatar_img(avatar_path: str, img: Image) -> Image:
     """
     在图片上绘制用户头像
     1. 获取用户头像
     2. 将头像裁剪为圆形
     3. 将头像绘制到图片上
     """
-    avater = Image.open(avater_path).convert("RGBA")
-    avater = avater.resize((150, 150), Image.LANCZOS)
+    avatar = Image.open(avatar_path).convert("RGBA")
+    avatar = avatar.resize((150, 150), Image.LANCZOS)
 
     # 创建一个与头像尺寸相同的透明蒙版
-    mask = Image.new("L", avater.size, 0)
+    mask = Image.new("L", avatar.size, 0)
     draw = ImageDraw.Draw(mask)
 
     #绘制一个白色的圆形，作为不透明区域
-    draw.ellipse((0, 0, avater.size[0], avater.size[1]), fill=255)
+    draw.ellipse((0, 0, avatar.size[0], avatar.size[1]), fill=255)
 
     # 将蒙版应用到头像上
-    avater.putalpha(mask)
+    avatar.putalpha(mask)
 
     # 将头像粘贴到图片上
-    img.paste(avater, (60, 1350), avater)
+    img.paste(avatar, (60, 1350), avatar)
 
 
 
     return img
-
-
-
 
 
 
