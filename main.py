@@ -1,19 +1,27 @@
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
+from astrbot.api import logger
 import random
 import json
 import os
+import tempfile
+from typing import Optional, List, Tuple
 from PIL import Image, ImageDraw, ImageFont
 import requests
 from datetime import datetime
-import tempfile
+
 
 
 
 @register("今日运势", "ominus", "一个今日运势海报生成图","1.0.0")
-class MyPlugin(Star):
+class JrysPlugin(Star):
+    """今日运势插件,可生成今日运势海报"""
+
     def __init__(self, context: Context):
         super().__init__(context)
+
+
+
 
 
     @filter.command("jrys")
@@ -57,7 +65,7 @@ class MyPlugin(Star):
 #__file__是一个内置变量，它包含当前文件的相对路径。
 # __file__ 变量只有在脚本文件（.py 文件）中运行时才会被定义。在交互式 Python 解释器（你通过 >>> 提示符运行代码的地方）中，__file__ 不存在。
 
-def jrys_data_init():
+def jrys_data_init() -> dict:
     """
     初始化 jrys.json 文件
     1. 检查当前目录下是否存在 jrys.json 文件
@@ -88,7 +96,7 @@ def jrys_data_init():
 # backgrounds = random.choice(os.listdir(os.path.join(os.path.dirname(__file__), "backgroundFolder"))) 这我写的有问题
 
 
-def get_background_image():
+def get_background_image() -> Optional[str]:
     """
     随机获取背景图片
     1. 在当前目录下的 backgroundFolder 文件夹中查找所有的 txt 文件
@@ -146,7 +154,7 @@ def get_background_image():
 
 
 
-def draw_jrys_img(): 
+def draw_jrys_img() -> Optional[Image.Image]: 
     """
     1. 初始化 jrys.json 文件
     2. 获取当前日期
@@ -205,7 +213,11 @@ def draw_jrys_img():
 
 
 
-def draw_text(img, text, position, y=None, color=(255, 255, 255),font_size=36, max_width=800, gradients=False):
+
+
+def draw_text(img: Image.Image, text: str, position: str, y: int = None,
+               color: Tuple[int, int, int] = (255, 255, 255), font_size: int = 36,
+               max_width: int = 800, gradients: bool = False ) -> Image.Image:
     """
     在图片上绘制文字
     参数：
@@ -279,7 +291,7 @@ def draw_text(img, text, position, y=None, color=(255, 255, 255),font_size=36, m
 
 
 
-def crop_center(image_path: str, width=1080, height=1920):
+def crop_center(image_path: str, width: int = 1080 , height: int = 1920) -> Optional[Image.Image]:
 
     """
     从图片中间裁剪指定尺寸的区域，如果图片尺寸小于目标尺寸，则先放大,太大则缩小。
@@ -338,18 +350,19 @@ def crop_center(image_path: str, width=1080, height=1920):
          print(f"错误：找不到图片文件：{image_path}")
     except Exception as e:
         print(f"发生错误：{e}")
+        return None
 
 
 
 
 def add_transparent_layer(
-    base_img,
-    box_width=800, 
-    box_height=400,
-    position=(100, 200),
-    layer_color=(0, 0, 0, 128),
-    radius=50,
-    ) -> Image:
+    base_img : Image.Image,
+    box_width: int = 800, 
+    box_height: int = 400,
+    position: Tuple[int, int]=(100, 200),
+    layer_color: Tuple[int, int, int, int] = (0, 0, 0, 128),
+    radius: int = 50,
+    ) -> Image.Image:
 
     """
     在图片上添加一个半透明图层
@@ -378,7 +391,7 @@ def add_transparent_layer(
     return Image.alpha_composite(base_img, overlay)
 
 
-def wrap_text(text: str, draw=None,max_width=1000, font=None):
+def wrap_text(text: str, draw: bool = None, max_width: int = 1000, font=None) -> List[str]:
     """
      将文字按最大宽度进行换行
     参数：
@@ -424,13 +437,16 @@ def wrap_text(text: str, draw=None,max_width=1000, font=None):
 
 
 
-def create_gradients_image(char, font, colors):
+def create_gradients_image(char: str, font, colors: List[Tuple[int, int, int]]) -> Image.Image:
     """
     创建渐变色字体图像
     参数：
         char (str): 要绘制的字符
         font: ImageFont对象
         colors (list of tuple): 渐变色列表，包含起始和结束颜色
+
+    Returns:
+        Image: 渐变色字体图像
 
     """
     width, height = font.getbbox(char)[2:]
@@ -468,7 +484,7 @@ def create_gradients_image(char, font, colors):
     return gradient
 
 
-def get_light_color():
+def get_light_color() -> List[Tuple[int, int, int]]:
     
 
     light_colors = [
@@ -485,7 +501,7 @@ def get_light_color():
 
 
 
-def get_avatar_img(user_id: str) -> str:
+def get_avatar_img(user_id: str) -> Optional[str]:
     """
     获取用户头像
     1. 获取用户头像
@@ -507,7 +523,7 @@ def get_avatar_img(user_id: str) -> str:
         return os.path.join(avatar_folder, f"{user_id}.jpg")
     
 
-def draw_avatar_img(avatar_path: str, img: Image) -> Image:
+def draw_avatar_img(avatar_path: str, img: Image.Image) -> Image.Image:
     """
     在图片上绘制用户头像
     1. 获取用户头像
