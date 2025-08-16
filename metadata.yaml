@@ -1,5 +1,5 @@
-name: 今日运势
-desc: 今日运势查询
+name: astrbot_plugin_jrysprpr
+desc: 今日运势查询，会生成一张图片，包含今日运势、宜忌、吉时等信息。
 help: 
   【基础指令】
   - /jrys ：查询今日运势
