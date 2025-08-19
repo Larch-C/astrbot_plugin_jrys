@@ -1,0 +1,92 @@
+{
+    "img_width": {
+        "description": "生成图片的宽度",
+        "type": "int",
+        "hint": "设置生成图片的宽度，单位为像素。默认值为 1080。",
+        "default": 1080
+    },
+    "img_height": {
+        "description": "生成图片的高度",
+        "type": "int",
+        "hint": "设置生成图片的高度，单位为像素。默认值为 1920。",
+        "default": 1920
+    },
+    "font_name": {
+        "description": "字体名称",
+        "type": "string",
+        "hint": "设置生成图片中使用的字体名称。默认值为 '千图马克手写体.ttf'(请注意如果要改字体, 需要在插件的font里添加相应的字体)。",
+        "default": "千图马克手写体.ttf"
+    },
+    "avatar_cache_expiration": {
+        "description": "头像缓存过期时间",
+        "type": "int",
+        "hint": "设置头像缓存的过期时间，单位为秒。默认值为 86400 秒（即 24 小时）。",
+        "default": 86400
+    },
+    "avater_size":{
+        "description": "头像尺寸",
+        "type": "list",
+        "item": {
+            "type": "int",
+            "description": "头像的尺寸，单位为像素。"
+        },
+        "hint": "设置头像的尺寸大小，默认为[150, 150]",
+        "default": [150, 150]
+    },
+    "avater_position":{
+        "description": "头像位置",
+        "type": "list",
+        "item": {
+            "type": "int",
+            "description": "头像的位置，单位为像素。"
+        },
+        "hint": "设置头像的尺寸大小，默认为[60, 1350]",
+        "default": [60, 1350]
+    },
+    "date_y_position":{
+        "description": "日期Y轴位置",
+        "type": "int",
+        "hint": "设置日期在图片上Y轴的位置，默认为1300",
+        "default": 1300
+    },
+    "summary_y_position":{
+        "description": "运势总结Y轴位置",
+        "type": "int",
+        "hint": "设置总结在图片上Y轴的位置，默认为1400",
+        "default": 1400
+    },
+    "lucky_star_y_position":{
+        "description": "幸运星Y轴位置",
+        "type": "int",
+        "hint": "设置幸运星在图片上Y轴的位置，默认为1500 例如(★★★★★★☆)",
+        "default": 1500
+    },
+    "sign_text_y_position":{
+        "description": "运势简短文本Y轴位置",
+        "type": "int",
+        "hint": "设置签名在图片上Y轴的位置，默认为1600 例如:(谦恭做事，必得人和，大事成就，一定兴隆)",
+        "default": 1600
+    },
+    "unsign_text_y_position":{
+        "description": "运势详细文本Y轴位置",
+        "type": "int",
+        "hint": "设置无签名在图片上Y轴的位置，默认为1700 例如:(福寿拱照德望高，财子寿全又温和，慈祥好善可恭敬，富贵繁荣得惠泽。财源特佳金钱有餘，离出生之地而往大都市求谋必得更发达。)",
+        "default": 1700
+    },
+    "warning_text_y_position":{
+        "description": "注意事项文本Y轴位置",
+        "type": "int",
+        "hint": "设置注意事项在图片上Y轴的位置，默认为1850 例如:(此运势仅供娱乐参考，请勿过度解读。)",
+        "default": 1850
+    }
+    
+
+
+    
+
+
+
+
+
+
+}

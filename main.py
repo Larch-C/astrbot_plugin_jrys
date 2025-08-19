@@ -1,73 +1,175 @@
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
+from astrbot.api import AstrBotConfig
 import random
 import json
 import os
 import tempfile
 from typing import Optional, List, Tuple
 from PIL import Image, ImageDraw, ImageFont
-import httpx
+import aiohttp
 from datetime import datetime
+import asyncio
+import aiofiles
+import aiofiles.os
+
 
 
 ONE_DAY_IN_SECONDS = 86400
+IMAGE_HEIGHT = 1920
+IMAGE_WIDTH = 1080
+AVATAR_SIZE = (150, 150)
+AVATAR_POSITION = (60, 1350)
+FONT_NAME = "千图马克手写体.ttf"
+
+TEXT_BOX_Y = 1270
+TEXT_BOX_HEIGHT = 700
+TEXT_BOX_RADIUS = 50
+
+DATE_Y = 1300
+SUMMARY_Y = 1400
+LUCKY_STAR_Y = 1500
+SIGN_TEXT_Y = 1600
+UNSIGN_TEXT_Y = 1700
+WARNING_TEXT_Y = 1850
+
+WARNING_TEXT_Y_OFFSET = 10
+UNSIGN_TEXT_Y_OFFSET = 15
+TEXT_WRAP_WIDTH = 1000
+
+LEFT_PADDING = 20
 
 
 @register("今日运势", "ominus", "一个今日运势海报生成图", "1.0.0")
 class JrysPlugin(Star):
-    """今日运势插件,可生成今日运势海报"""
+    """今日运势插件,可生成今日运势海报"""   
 
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config:AstrBotConfig):
         super().__init__(context)
+
+        self.config = config
+        self.avatar_cache_expiration = self.config.get("avatar_cache_expiration", ONE_DAY_IN_SECONDS)  # 默认一天过期
+        self.font_name = self.config.get("font_name", FONT_NAME)  # 默认字体名称
+        
+        self.image_width = self.config.get("img_width", IMAGE_WIDTH)
+        self.image_height = self.config.get("img_height", IMAGE_HEIGHT)  # 默认图片高度
+        
+
+        avatar_position_list = self.config.get("avatar_position", list(AVATAR_POSITION))  
+        self.avatar_position = tuple(avatar_position_list)# 默认头像位置
+
+        avatar_size_list = self.config.get("avatar_size", list(AVATAR_SIZE))
+        self.avatar_size = tuple(avatar_size_list)
+
+        self.date_y = self.config.get("date_y_position", DATE_Y)
+        self.summary_y = self.config.get("summary_y_position", SUMMARY_Y)
+        self.lucky_star_y = self.config.get("lucky_star_y_position", LUCKY_STAR_Y)
+        self.sign_text_y = self.config.get("sign_text_y_position", SIGN_TEXT_Y)
+        self.unsign_text_y = self.config.get("unsign_text_y_position", UNSIGN_TEXT_Y)
+        self.warning_text_y = self.config.get("warning_text_y_position", WARNING_TEXT_Y)
+
+
+
+
+
         self.data_dir = os.path.dirname(os.path.abspath(__file__))
         self.avatar_dir = os.path.join(self.data_dir, "avatars")
         self.background_dir = os.path.join(self.data_dir, "backgroundFolder")
         self.font_dir = os.path.join(self.data_dir, "font")
-        self.font_path = os.path.join(self.data_dir, "font", "千图马克手写体.ttf")
+        self.font_path = os.path.join(self.data_dir, "font", self.font_name)
+
+        #网络请求部分
+        self._http_timeout = aiohttp.ClientTimeout(total=5)  # 设置请求超时时间为5秒
+        self._connection_limit = aiohttp.TCPConnector(limit=10)  # 限制并发连接数为10
+        self._session = aiohttp.ClientSession(timeout=self._http_timeout, connector=self._connection_limit)
+
+        self.fonts = {}
+        FONT_SIZES = [50, 60, 36, 30]  # 字体大小列表
+        try:
+            for size in FONT_SIZES:
+                self.fonts[size] = ImageFont.truetype(self.font_path, size)
+           
+
+        except Exception:
+            logger.error(f"无法加载字体文件 {self.font_path},使用默认字体回退")
+            self.default_font = ImageFont.load_default()
+            for size in FONT_SIZES:
+                self.fonts[size] = self.default_font
+
+        # 初始化jrys数据
+        self.jrys_data = {}
+        self.is_data_loaded = False 
+
 
         # 确保目录存在
         os.makedirs(self.avatar_dir, exist_ok=True)
         os.makedirs(self.background_dir, exist_ok=True)
         os.makedirs(self.font_dir, exist_ok=True)
 
-        # 初始化数据
-        self.jrys_data = self._load_jrys_data()
+        
+        
 
     @filter.command("jrys")
     async def jrys(self, event: AstrMessageEvent):
         """
         输入/jrys 指令后，生成今日运势海报
         """
+
         user_id = event.get_sender_id()
         user_name = event.get_sender_name()
 
-        # 获取用户头像
+        self.jrys_data = await self._load_jrys_data()  # 确保数据已加载
+        if not self.jrys_data:
+            logger.error("运势数据未加载或为空")
+            yield event.plain_result("运势数据加载失败，请稍后再试～")
+            return
+
+        
         logger.info(f"正在为用户 {user_name}({user_id}) 生成今日运势")
 
-        avatar_path = await self.get_avatar_img(user_id)
-        if avatar_path is None:
-            logger.error(f"获取用户 {user_name}({user_id}) 头像失败")
-            yield event.plain_result("获取头像失败，请稍后再试～")
-            return
 
         try:
 
-            img = await self.draw_jrys_img()
-            if img is None:
+            results = await asyncio.gather(
+                self.get_avatar_img(user_id),
+                self.get_background_image(),
+                return_exceptions=True # 捕获异常
+            )
+
+            avatar_path, background_path = results
+
+            if isinstance(avatar_path, Exception):
+                logger.error(f"获取头像时出错: {avatar_path}")
+                yield event.plain_result("获取头像失败，请稍后再试～")
+                return
+            
+            if isinstance(background_path, Exception):
+                logger.error(f"获取背景图片时出错: {background_path}")
+                yield event.plain_result("获取背景图片失败，请稍后再试～")
+                return
+            
+
+          
+        except Exception as e:
+            logger.error(f"获取头像或背景图片时出错: {e}")
+            yield event.plain_result("获取头像或背景图片失败，请稍后再试～")
+            return
+        
+        temp_file_path = None  # 用于存储临时文件路径
+
+        try:
+
+            logger.info(f"正在为用户 {user_name}({user_id}) 生成今日运势图片")
+            temp_file_path = await asyncio.to_thread(
+                self._generate_image_sync, avatar_path, background_path
+            )
+
+            if temp_file_path is None:
                 logger.error("生成今日运势图片失败")
                 yield event.plain_result("生成图片失败，请稍后再试～")
                 return
-
-            # 在图片上绘制用户头像
-            img = self.draw_avatar_img(avatar_path, img)
-
-            # 保存图片到临时文件并且发送
-            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_file:
-                img = img.convert("RGB")  # 转换为 RGB 模式
-                img.save(temp_file, format="JPEG", quality=85, optimize=True)
-                temp_file_path = temp_file.name
-
+            
             yield event.image_result(temp_file_path)
             logger.info(f"成功为用户 {user_name}({user_id}) 生成今日运势图片")
 
@@ -78,15 +180,166 @@ class JrysPlugin(Star):
         finally:
             # 用完后删除临时文件
 
-            if temp_file_path:
-
+            if temp_file_path and os.path.exists(temp_file_path):
                 try:
-                    os.remove(temp_file_path)
+                    await aiofiles.os.remove(temp_file_path)
+                    logger.info(f"成功删除临时文件")
+
+
+                except OSError as e:
+                    logger.warning(f"删除临时文件 {temp_file_path} 失败: {e}")
+                
+                except FileNotFoundError:
+                    logger.warning(f"临时文件 {temp_file_path} 已经被删除或不存在")
+                    pass
 
                 except Exception as e:
                     logger.warning(f"删除临时文件 {temp_file_path} 失败: {e}")
 
-    def _load_jrys_data(self) -> dict:
+
+    def _generate_image_sync(self, avatar_path: str, background_path: str) -> Optional[str]:
+        """
+            同步函数：执行所有CPU密集的图像处理任务。
+            这个函数将在一个单独的线程中运行，以避免阻塞asyncio事件循环。
+        Args:
+            avatar_path (str): 用户头像的路径
+            background_path (str): 背景图片的路径
+        Returns:
+            Optional[str]: 返回生成的运势海报图片路径，如果失败则返回None
+        """
+        if not self.jrys_data:
+            logger.error("运势数据为空")
+            return None
+        
+        date_y = self.date_y
+        summary_y = self.summary_y
+        lucky_star_y = self.lucky_star_y
+        sign_text_y = self.sign_text_y
+        unsign_text_y = self.unsign_text_y
+        warning_text_y = self.warning_text_y
+
+        try:
+            available_keys_list = list(self.jrys_data.keys())
+    
+            key_1 = random.choice(available_keys_list)
+
+            if key_1 not in self.jrys_data:
+                logger.error(f"运势数据中没有找到 {key_1} 的数据")
+                return None
+
+            key_2 = random.choice(list(range(len(self.jrys_data[key_1]))))
+            fortune_data = self.jrys_data[key_1][key_2]
+
+            # 获取当前日期
+            now = datetime.now()
+            date = f"{now.strftime('%Y/%m/%d')}"
+
+            # 1. 获取运势数据
+            fortune_summary = fortune_data.get("fortuneSummary", "运势数据未知")
+            lucky_star = fortune_data.get("luckyStar", "幸运星未知")
+            sign_text = fortune_data.get("signText", "星座运势未知")
+            unsign_text = fortune_data.get("unsignText", "非星座运势未知")
+            warning_text = "仅供娱乐 | 相信科学 | 请勿迷信"
+
+            # 如果unsign_lines>3行，怕这个warning_text和unsign_text贴在一起，加个自动换行的
+            unsign_lines = self.wrap_text(unsign_text, font=self.fonts[36], max_width=TEXT_WRAP_WIDTH)
+    
+
+            # 如果unsign_lines>3行，warning_text_y向下移动 unsign_text_y向上移动
+            if len(unsign_lines) > 3:
+                warning_text_y += (len(unsign_lines) - 3) * WARNING_TEXT_Y_OFFSET  # 每行10像素的间距
+                unsign_text_y -= (len(unsign_lines) - 3) * UNSIGN_TEXT_Y_OFFSET  # 每行15像素的间距
+
+            # 2. 核心图像处理流程
+
+            # 裁切图片
+            image = self.crop_center(background_path)
+            if image is None:
+                logger.error("裁剪背景图片失败")
+                return None
+
+            #添加半透明图层
+            image = self.add_transparent_layer(
+                image, position=(0, 1270), box_width=1080, box_height=700
+            )
+
+            # 在图片上绘制文字
+
+            #绘制日期
+            image = self.draw_text(
+                image,
+                text=date,
+                position="center",
+                y=date_y,
+                color=(255, 255, 255),
+                font=self.fonts[50],  # 使用50号字体
+                gradients=True,
+            )
+
+            #绘制幸运总结
+            image = self.draw_text(
+                image,
+                text=fortune_summary,
+                position="center",
+                y=summary_y,
+                color=(255, 255, 255),
+                font=self.fonts[60],  # 使用60号字体
+            )
+
+            #绘制幸运星
+            image = self.draw_text(
+                image,
+                text=lucky_star,
+                position="center",
+                y=lucky_star_y,
+                color=(255, 255, 255),
+                font=self.fonts[60],  # 使用60号字体
+                gradients=True,
+            )
+            #绘制运势文本
+            image = self.draw_text(
+                image,
+                text=sign_text,
+                position="left",
+                y=sign_text_y,
+                color=(255, 255, 255),
+                font=self.fonts[30],  # 使用30号字体
+            )
+            image = self.draw_text(
+                image,
+                text=unsign_text,
+                position="left",
+                y=unsign_text_y,
+                color=(255, 255, 255),
+                font=self.fonts[30],  # 使用30号字体
+            )
+            #绘制警告文本
+            image = self.draw_text(
+                image,
+                text=warning_text,
+                position="center",
+                y=self.warning_text_y,
+                color=(255, 255, 255),
+                font=self.fonts[30],  # 使用30号字体
+            )
+
+            # 在图片上绘制用户头像
+            image = self.draw_avatar_img(avatar_path, image)
+
+
+            #3 . 保存图片到临时文件并且返回路径
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_file:
+                image = image.convert("RGB")  # 确保图片是RGB模式
+                image.save(temp_file, format="JPEG", quality=85, optimize=True)
+                return temp_file.name
+
+        except Exception as e:
+            logger.error(f"获取运势数据失败: {e}")
+            return None
+     
+
+
+    async def _load_jrys_data(self) -> dict:
         """
         初始化 jrys.json 文件
         1. 检查当前目录下是否存在 jrys.json 文件
@@ -94,21 +347,30 @@ class JrysPlugin(Star):
         3. 如果存在，则读取文件内容
         4. 如果文件内容不是有效的 JSON 格式，则打印错误信息
         """
+
+        if self.is_data_loaded:
+            return self.jrys_data
+        
         jrys_path = os.path.join(self.data_dir, "jrys.json")
 
         # 检查 jrys.json 文件是否存在,如果不存在，则创建一个空的 jrys.json 文件
         if not os.path.exists(jrys_path):
-            with open(jrys_path, "w", encoding="utf-8") as f:
-                json.dump({}, f)
+            async with aiofiles.open(jrys_path, "w", encoding="utf-8") as f:
+                await f.write(json.dumps({}))
                 logger.info(f"创建空的运势数据文件: {jrys_path}")
+
+        
 
         # 读取 JSON 文件
         try:
-            with open(jrys_path, "r", encoding="utf-8") as f:
-                jrys_data = json.load(f)
+            async with aiofiles.open(jrys_path, "r", encoding="utf-8") as f:
+                content = await f.read()
+                #json.loads是CPU密集型，用 to_thread 包装
+                self.jrys_data = await asyncio.to_thread(json.loads, content)
+                self.is_data_loaded = True  # 标记数据已加载
                 logger.info(f"读取运势数据文件: {jrys_path}")
 
-            return jrys_data
+            return self.jrys_data
 
         except FileNotFoundError:
             logger.error(f"文件 {jrys_path} 没找到")
@@ -124,30 +386,28 @@ class JrysPlugin(Star):
         2. 随机选择一个 txt 文件
         3. 从选中的 txt 文件中随机选择一行
         4. 将选中的行作为图片的 URL
-        5.返回图片
+        5.返回图片路径
         """
 
         try:
             # 查找所有的 txt 文件
-            background_files = [
-                f
-                for f in os.listdir(self.background_dir)
-                if os.path.splitext(f)[1] in [".txt"]
-            ]
+            background_files = await asyncio.to_thread(
+                lambda: [f for f in os.listdir(self.background_dir) if f.endswith('.txt')]
+            )
 
             if not background_files:
                 logger.warning("没有找到背景图片文件")
                 return None
             # 随机选择一个 txt 文件
             background_file = random.choice(background_files)
-            backgound_file_path = os.path.join(self.background_dir, background_file)
+            background_file_path = os.path.join(self.background_dir, background_file)
 
             # 从选中的 txt 文件中随机选择一行
-            with open(backgound_file_path, "r", encoding="utf-8") as f:
+            async with aiofiles.open(background_file_path, "r", encoding="utf-8") as f:
 
                 # 读取文件内容
                 background_urls = [
-                    line.strip() for line in f if line.strip()
+                    line.strip() async for line in f if line.strip()
                 ]  
 
                 if not background_urls:
@@ -168,135 +428,28 @@ class JrysPlugin(Star):
                 if os.path.exists(image_path):
                     return image_path
                 # 下载图片
-                try:
-                    async with httpx.AsyncClient() as client:
-                        # 异步下载图片
-                        response = await client.get(image_url, timeout=5)
-                        response.raise_for_status()
 
-                    with open(image_path, "wb") as image_file:
-                        image_file.write(response.content)
+                        
+                try:
+                    async with self._session.get(image_url) as response:
+                        response.raise_for_status()  # 检查请求是否成功  
+                        content = await response.read()  # 异步读取响应内容
+
+                        async with aiofiles.open(image_path, "wb") as f:
+                            await f.write(content)
+
                         logger.info(f"下载图片成功: {image_url}")
                     return image_path
 
-                except httpx.HTTPStatusError as e:
+                except aiohttp.ClientResponseError as e:
                     logger.error(f"状态码错误: {e}")
+                    return None
+                except aiohttp.ClientError as e:
+                    logger.error(f"请求错误: {e}")
                     return None
 
         except Exception as e:
             logger.error(f"获取背景图片时出错: {e}")
-            return None
-
-    async def draw_jrys_img(self) -> Optional[Image.Image]:
-        """
-        1. 初始化 jrys.json 文件
-        2. 获取当前日期
-        3. 获取 jrys.json 文件中的数据
-        4. 随机选择一张背景图片
-        5. 在图片上绘制文字
-        """
-        if not self.jrys_data:
-            logger.error("运势数据为空")
-            return None
-
-        try:
-            key_list = ["84", "0", "70", "28", "56", "42", "98", "14"]
-            key_1 = random.choice(key_list)
-
-            if key_1 not in self.jrys_data:
-                logger.error(f"运势数据中没有找到 {key_1} 的数据")
-                return None
-
-            key_2 = random.choice(list(range(len(self.jrys_data[key_1]))))
-            fortune_data = self.jrys_data[key_1][key_2]
-
-            # 获取当前日期
-            date = f"{datetime.now().year}/{datetime.now().month}/{datetime.now().day}"
-
-            # 获取运势数据
-            fortune_summary = fortune_data.get("fortuneSummary", "运势数据未知")
-            lucky_star = fortune_data.get("luckyStar", "幸运星未知")
-            sign_text = fortune_data.get("signText", "星座运势未知")
-            unsign_text = fortune_data.get("unsignText", "非星座运势未知")
-            warning_text = "仅供娱乐 | 相信科学 | 请勿迷信"
-
-            # 如果unsign_lines>3行，怕这个warning_text和unsign_text贴在一起，加个自动换行的
-            unsign_lines = self.wrap_text(unsign_text, max_width=1000)
-            warning_text_y = 1850
-            unsign_text_y = 1700
-
-            # 如果unsign_lines>3行，warning_text_y向下移动 unsign_text_y向上移动
-            if len(unsign_lines) > 3:
-                warning_text_y += (len(unsign_lines) - 3) * 10  # 每行10像素的间距
-                unsign_text_y -= (len(unsign_lines) - 3) * 15  # 每行15像素的间距
-
-            image_path = await self.get_background_image()
-            if not image_path:
-                return None
-
-            # 裁切图片
-            image = self.crop_center(image_path)
-
-            image = self.add_transparent_layer(
-                image, position=(0, 1270), box_width=1080, box_height=700
-            )
-
-            # 在图片上绘制文字
-            image = self.draw_text(
-                image,
-                text=date,
-                position="center",
-                y=1300,
-                color=(255, 255, 255),
-                font_size=50,
-                gradients=True,
-            )
-            image = self.draw_text(
-                image,
-                text=fortune_summary,
-                position="center",
-                y=1400,
-                color=(255, 255, 255),
-                font_size=60,
-            )
-            image = self.draw_text(
-                image,
-                text=lucky_star,
-                position="center",
-                y=1500,
-                color=(255, 255, 255),
-                font_size=60,
-                gradients=True,
-            )
-            image = self.draw_text(
-                image,
-                text=sign_text,
-                position="left",
-                y=1600,
-                color=(255, 255, 255),
-                font_size=30,
-            )
-            image = self.draw_text(
-                image,
-                text=unsign_text,
-                position="left",
-                y=unsign_text_y,
-                color=(255, 255, 255),
-                font_size=30,
-            )
-            image = self.draw_text(
-                image,
-                text=warning_text,
-                position="center",
-                y=warning_text_y,
-                color=(255, 255, 255),
-                font_size=30,
-            )
-
-            return image
-
-        except Exception as e:
-            logger.error(f"获取运势数据失败: {e}")
             return None
 
     def draw_text(
@@ -304,9 +457,9 @@ class JrysPlugin(Star):
         img: Image.Image,
         text: str,
         position: str,
+        font: ImageFont.ImageFont,
         y: int = None,
         color: Tuple[int, int, int] = (255, 255, 255),
-        font_size: int = 36,
         max_width: int = 800,
         gradients: bool = False,
     ) -> Image.Image:
@@ -315,29 +468,21 @@ class JrysPlugin(Star):
         参数：
             img (Image): 要绘制的图片
             text (str): 要绘制的文字
-            position (tuple or str): 文字的位置, 可为'topleft','center'或坐标元组
+            position (tuple or str): 文字的位置, 可为'left','center'或坐标元组
             y (int): 文字的y坐标,如果position为'topleft'或'center',则y无效
             color (tuple): 文字颜色，默认为白色
-            font_size (int): 字体大小,默认为36
+            font (ImageFont): 字体对象,如果为None则使用默认字体
             max_width (int): 文字的最大宽度,默认为800
             gradients (bool): 是否使用渐变色填充文字，默认为False
         """
 
         try:
             draw = ImageDraw.Draw(img)
-
-            # 加载字体
-            try:
-
-                font = ImageFont.truetype(self.font_path, font_size)  # 加载字体，字号36
-
-            except FileNotFoundError:
-                print(f"无法找到字体文件 {self.font_path},以切换默认字体")
-                font = ImageFont.load_default()  # 找不到就用默认字体
+    
 
             # 自动换行处理
             lines = self.wrap_text(
-                text=text, font=font, max_width=1000, draw=draw
+                text=text, font=font, draw=draw, max_width=TEXT_WRAP_WIDTH, 
             )  # 将文字按最大宽度进行换行
 
             # 获取图片的宽高
@@ -345,16 +490,22 @@ class JrysPlugin(Star):
 
             if isinstance(position, str):
                 if position == "center":
-                    # 计算文字的位置
-                    x_func = (
-                        lambda line: (
-                            img_width - draw.textbbox((0, 0), line, font=font)[2]
-                        )
-                        // 2
-                    )
+                    def x_func(line):
+                        bbox = draw.textbbox((0, 0), line, font=font)
+                        line_width = bbox[2] - bbox[0]  # 获取文字宽度
+                        return (img_width - line_width) // 2  # 计算x坐标
+                    
+                    def offset_x_func(line):
+                        bbox = draw.textbbox((0, 0), line, font=font)
+                        return -bbox[0]
+                        
 
                 elif position == "left":
-                    x_func = lambda line: 20
+                    def x_func(line):
+                        return LEFT_PADDING  # 固定左侧留白
+                    
+                    def offset_x_func(line):
+                        return 0
                 else:
                     raise ValueError(
                         "position参数错误,只能为'topleft','center'或坐标元组"
@@ -363,24 +514,35 @@ class JrysPlugin(Star):
                 text_y = y if y is not None else 0
             elif isinstance(position, tuple):
                 text_x, text_y = position
-                x_func = lambda line: text_x
+                def x_func(line):
+                    return text_x
+                def offset_x_func(line):
+                    return 0
+              
             else:
-                raise ValueError("position参数错误,只能为'topleft','center'或坐标元组")
+                raise ValueError("position参数错误,只能为'left','center'或坐标元组")
 
             # 绘制每一行
-            line_spacing = int(font_size * 1.5)  # 行间距
+            line_spacing = int(font.size * 1.5)  # 行间距
             for line in lines:
                 if gradients:
-                    text_x = x_func(line)
+                    base_x = x_func(line)
+                    offset_x = offset_x_func(line)
                     for char in line:
                         #
                         colors = self.get_light_color()
                         gradient_char = self.create_gradients_image(char, font, colors)
-                        img.paste(gradient_char, (text_x, text_y), gradient_char)
-                        text_x += font.getbbox(char)[2]  # 更新x坐标
-                else:
+                        img.paste(gradient_char, (base_x + offset_x, text_y), gradient_char)
 
-                    draw.text((x_func(line), text_y), line, font=font, fill=color)
+                        bbox = font.getbbox(char)
+                        char_width = bbox[2] - bbox[0]  # 获取字符宽度
+                        base_x += char_width  # 更新x坐标
+                        offset_x += bbox[0]  # 更新偏移量
+             
+                else:
+                    # 绘制普通文字
+                    offset_x = offset_x_func(line)  # 获取偏移量
+                    draw.text((x_func(line) + offset_x, text_y), line, font=font, fill=color)
 
                 text_y += line_spacing  # 更新y坐标
 
@@ -391,7 +553,7 @@ class JrysPlugin(Star):
             return img
 
     def crop_center(
-        self, image_path: str, width: int = 1080, height: int = 1920
+        self, image_path: str, width: int = None, height: int = None
     ) -> Optional[Image.Image]:
         """
         从图片中间裁剪指定尺寸的区域，如果图片尺寸小于目标尺寸，则先放大,太大则缩小。
@@ -400,7 +562,12 @@ class JrysPlugin(Star):
 
             width (int): 裁剪宽度，默认为 1080 像素。
             height (int): 裁剪高度，默认为 1920 像素。
+
+        返回：
+            Image.Image: 裁剪后的图片对象，如果发生错误则返回 None。
         """
+        width = width if width is not None else self.image_width
+        height = height if height is not None else self.image_height
         try:
             img = Image.open(image_path).convert("RGBA")
             img_width, img_height = img.size
@@ -487,7 +654,7 @@ class JrysPlugin(Star):
             return base_img
 
     def wrap_text(
-        self, text: str, draw: bool = None, max_width: int = 1000, font=None
+        self, text: str,  font: ImageFont.ImageFont, draw: ImageDraw.ImageDraw=None, max_width: int = TEXT_WRAP_WIDTH
     ) -> List[str]:
         """
         将文字按最大宽度进行换行
@@ -495,38 +662,29 @@ class JrysPlugin(Star):
             text (str): 原始文字
             max_width (int): 最大宽度
             draw: ImageDraw对象，用于测量文字宽度
-            font: ImageFont对象默认1000
+            font: ImageFont对象
         返回：
             list[str]: 每行一段文字
 
         """
         try:
             if draw is None:
-                img = Image.new("RGB", (1080, 1920))
+                img = Image.new("RGB", (self.image_width, self.image_height))
                 draw = ImageDraw.Draw(img)
-
-            if font is None:
-                # 字体
-                try:
-
-                    font = ImageFont.truetype(self.font_path, 36)  # 加载字体，字号36
-
-                except FileNotFoundError:
-                    print(f"无法找到字体文件 {self.font_path},以切换默认字体")
-                    font = ImageFont.load_default()  # 找不到就用默认字体
-
-            lines = []
-            line = ""
+        
+            lines: List[str] = []
+            current_line = ""
             for char in text:
-                test_line = line + char
-                width = draw.textbbox((0, 0), test_line, font=font)[2]
+                test_line = current_line + char
+                bbox = draw.textbbox((0, 0), test_line, font=font)
+                width = bbox[2] - bbox[0]  # 获取文字宽度
                 if width <= max_width:
-                    line = test_line
+                    current_line = test_line
                 else:
-                    lines.append(line)
-                    line = char
-            if line:
-                lines.append(line)
+                    lines.append(current_line)
+                    current_line = char
+            if current_line:
+                lines.append(current_line)
             return lines
         except Exception as e:
             logger.error(f"换行时出错: {e}")
@@ -547,14 +705,26 @@ class JrysPlugin(Star):
 
         """
         try:
-            width, height = font.getbbox(char)[2:]
+            bbox = font.getbbox(char)
+            width = bbox[2] - bbox[0]  # 字符宽度
+            height = bbox[3] - bbox[1]  # 字符高度
+            if width <= 0 or height <= 0:
+                width, height = font.getsize(char)  # 如果获取的宽度或高度为0，则使用字体大小
+                offset_x, offset_y = 0, 0
+
+            else:
+                # 计算偏移量
+                offset_x = -bbox[0]
+                offset_y = -bbox[1]
+
+
             gradient = Image.new("RGBA", (width, height), color=0)
             draw = ImageDraw.Draw(gradient)
 
             # 字体蒙版
             mask = Image.new("L", (width, height), 0)
             mask_draw = ImageDraw.Draw(mask)
-            mask_draw.text((0, 0), char, font=font, fill=255)
+            mask_draw.text((offset_x, offset_y), char, font=font, fill=255)
 
             num_colors = len(colors)
             if num_colors < 2:
@@ -587,7 +757,8 @@ class JrysPlugin(Star):
         except Exception as e:
             logger.error(f"创建渐变色字体图像时出错: {e}")
             # 如果出错，返回一个透明图像
-            img = Image.new("RGBA", (font.getbbox(char)[2:]), (255, 255, 255, 0))
+        
+            img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
             draw = ImageDraw.Draw(img)
             draw.text((0, 0), char, font=font, fill=(255, 255, 255))
             return img
@@ -624,26 +795,36 @@ class JrysPlugin(Star):
         try:
             avatar_path = os.path.join(self.avatar_dir, f"{user_id}.jpg")
             # 检查头像是否存在
-            if os.path.exists(avatar_path):
-                file_age = datetime.now().timestamp() - os.path.getmtime(avatar_path)
-                if file_age < ONE_DAY_IN_SECONDS:  # 如果头像文件小于一天，则不下载
+            if await aiofiles.os.path.exists(avatar_path):
+                def _file_stat(path):
+                    try:
+                        st = os.stat(path)
+                        return st.st_mtime
+                    except FileNotFoundError:
+                        return None
+                
+                file_mtime = await asyncio.to_thread(_file_stat, avatar_path)
+                file_age = datetime.now().timestamp() - file_mtime
+                if file_age < self.avatar_cache_expiration:  # 默认如果头像文件小于一天，则不下载
                     return avatar_path
 
             url = f"http://q.qlogo.cn/g?b=qq&nk={user_id}&s=640"
 
-            async with httpx.AsyncClient() as client:
-                # 异步请求头像
-                response = await client.get(url, timeout=5)
+            try:
+                async with self._session.get(url) as response:
+                    response.raise_for_status()
+                    content = await response.read()  # 异步读取响应内容
+                        
+                    async with aiofiles.open(os.path.join(avatar_path), "wb") as f:
+                        await f.write(content)
 
-            # 检查请求是否成功
-            if response.status_code == 200:
-
-                with open(os.path.join(avatar_path), "wb") as f:
-                    f.write(response.content)
-
-                return avatar_path
-            else:
-                logger.error(f"获取头像失败: {response.status_code}")
+                    return avatar_path
+                
+            except aiohttp.ClientResponseError as e:
+                logger.error(f"状态码错误: {e}")
+                return None
+            except aiohttp.ClientError as e:
+                logger.error(f"请求错误: {e}")
                 return None
 
         except Exception as e:
@@ -664,20 +845,20 @@ class JrysPlugin(Star):
         """
         try:
             avatar = Image.open(avatar_path).convert("RGBA")
-            avatar = avatar.resize((150, 150), Image.LANCZOS)
+            avatar = avatar.resize(self.avatar_size, Image.LANCZOS)
 
             # 创建一个与头像尺寸相同的透明蒙版
             mask = Image.new("L", avatar.size, 0)
-            draw = ImageDraw.Draw(mask)
+            mask_draw = ImageDraw.Draw(mask)
 
             # 绘制一个白色的圆形，作为不透明区域
-            draw.ellipse((0, 0, avatar.size[0], avatar.size[1]), fill=255)
+            mask_draw.ellipse((0, 0, avatar.size[0], avatar.size[1]), fill=255)
 
             # 将蒙版应用到头像上
             avatar.putalpha(mask)
 
             # 将头像粘贴到图片上
-            img.paste(avatar, (60, 1350), avatar)
+            img.paste(avatar, self.avatar_position, avatar)
 
             return img
         except Exception as e:
@@ -687,4 +868,8 @@ class JrysPlugin(Star):
 
     async def terminate(self):
         """插件终止时的清理工作"""
+        if self._session:
+            await self._session.close()
+            logger.info("HTTP会话已关闭")
+
         logger.info("今日运势插件已终止")
