@@ -1,2 +1,4 @@
 Pillow
-httpx
+aiohttp
+aiofiles
+typing
