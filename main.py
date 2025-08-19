@@ -103,10 +103,10 @@ class JrysPlugin(Star):
         os.makedirs(self.background_dir, exist_ok=True)
         os.makedirs(self.font_dir, exist_ok=True)
 
-    @filter.command("jrys")
+    @filter.command("jrys", alias=["今日运势", "运势"])
     async def jrys(self, event: AstrMessageEvent):
         """
-        输入/jrys 指令后，生成今日运势海报
+        输入/jrys,"/今日运势", "/运势"指令后，生成今日运势海报
         """
 
         user_id = event.get_sender_id()
